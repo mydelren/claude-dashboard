@@ -99,7 +99,7 @@ Multi-provider support: z.ai/ZHIPU, Codex, Gemini, Antigravity auto-detected whe
 | | `performance` | Composite efficiency badge (cache hit + output ratio) |
 | | `forecast` | Estimated hourly cost based on session rate |
 | | `budget` | Daily spending vs configured budget limit⁵ |
-| | `tokenSpeed` | Output token generation speed (tok/s) |
+| | `tokenSpeed` | Output token generation speed (tok/s) — session average or last response via `tokenSpeedMode` |
 | | `todayCost` | Total spending across all sessions today |
 | **Status** | `peakHours` | Peak hours indicator with countdown ([based on PeakClaude](https://github.com/pforret/PeakClaude))⁶ |
 | | `tagStatus` | Commits ahead of matched git tags (default pattern `v*`, customize via `tagPatterns`)⁷ |

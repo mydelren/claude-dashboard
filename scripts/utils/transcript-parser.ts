@@ -46,6 +46,9 @@ function createParsedTranscript(): ParsedTranscript {
     pendingTaskCreates: new Map(),
     pendingTaskUpdates: new Map(),
     activeSlashCommand: null,
+    totalOutputTokens: 0,
+    seenMessageIds: new Set(),
+    lastRequestOutput: 0,
   };
 }
 
@@ -230,6 +233,46 @@ function processEntries(
           existing.toolUses.delete(block.tool_use_id);
         }
       }
+    }
+
+    // Token accounting for the tokenSpeed widget, covering both spans it can report.
+    // A response arrives as several records sharing one message id, and the usage
+    // block repeats on each — most of them zero, with the real count on the last —
+    // so both accumulators key off the id and ignore zeroes.
+    if (entry.type === 'assistant') {
+      const msg = entry.message as { id?: string; usage?: { output_tokens?: number } } | undefined;
+      const msgId = msg?.id;
+      const out = msg?.usage?.output_tokens;
+
+      // Session total: sum each response once.
+      if (msgId && typeof out === 'number' && out > 0 && !existing.seenMessageIds.has(msgId)) {
+        existing.seenMessageIds.add(msgId);
+        existing.totalOutputTokens += out;
+      }
+
+      // Newest response: its own output plus the wall-clock span it took. The span
+      // runs from the last non-assistant entry (the turn or tool result that
+      // triggered the request) to this record; the response's own first-to-last
+      // record gap covers only the tail of the stream and would overstate the rate.
+      if (msgId) {
+        if (msgId !== existing.lastRequestId) {
+          existing.lastRequestId = msgId;
+          existing.lastRequestOutput = 0;
+          existing.lastRequestDurationMs = undefined;
+        }
+        if (typeof out === 'number' && out > existing.lastRequestOutput) {
+          existing.lastRequestOutput = out;
+        }
+        if (entry.timestamp) {
+          const t = Date.parse(entry.timestamp);
+          if (Number.isFinite(t) && existing.lastBoundaryAt !== undefined && t > existing.lastBoundaryAt) {
+            existing.lastRequestDurationMs = t - existing.lastBoundaryAt;
+          }
+        }
+      }
+    } else if (entry.timestamp) {
+      const t = Date.parse(entry.timestamp);
+      if (Number.isFinite(t)) existing.lastBoundaryAt = t;
     }
   }
 }

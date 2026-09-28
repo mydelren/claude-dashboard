@@ -79,6 +79,7 @@ var DEFAULT_CONFIG = {
   language: "auto",
   plan: "max",
   displayMode: "compact",
+  tokenSpeedMode: "session",
   cache: {
     ttlSeconds: 300
   }
@@ -1892,7 +1893,10 @@ function createParsedTranscript() {
     nextTaskId: 1,
     pendingTaskCreates: /* @__PURE__ */ new Map(),
     pendingTaskUpdates: /* @__PURE__ */ new Map(),
-    activeSlashCommand: null
+    activeSlashCommand: null,
+    totalOutputTokens: 0,
+    seenMessageIds: /* @__PURE__ */ new Set(),
+    lastRequestOutput: 0
   };
 }
 var SLASH_COMMAND_TAG_RE = /<command-name>([^<]+)<\/command-name>/;
@@ -2025,6 +2029,35 @@ function processEntries(entries, existing) {
           existing.toolUses.delete(block.tool_use_id);
         }
       }
+    }
+    if (entry.type === "assistant") {
+      const msg = entry.message;
+      const msgId = msg?.id;
+      const out = msg?.usage?.output_tokens;
+      if (msgId && typeof out === "number" && out > 0 && !existing.seenMessageIds.has(msgId)) {
+        existing.seenMessageIds.add(msgId);
+        existing.totalOutputTokens += out;
+      }
+      if (msgId) {
+        if (msgId !== existing.lastRequestId) {
+          existing.lastRequestId = msgId;
+          existing.lastRequestOutput = 0;
+          existing.lastRequestDurationMs = void 0;
+        }
+        if (typeof out === "number" && out > existing.lastRequestOutput) {
+          existing.lastRequestOutput = out;
+        }
+        if (entry.timestamp) {
+          const t = Date.parse(entry.timestamp);
+          if (Number.isFinite(t) && existing.lastBoundaryAt !== void 0 && t > existing.lastBoundaryAt) {
+            existing.lastRequestDurationMs = t - existing.lastBoundaryAt;
+          }
+        }
+      }
+    } else if (entry.timestamp) {
+      const t = Date.parse(entry.timestamp);
+      if (Number.isFinite(t))
+        existing.lastBoundaryAt = t;
     }
   }
 }
@@ -4312,12 +4345,11 @@ var tokenSpeedWidget = {
   id: "tokenSpeed",
   name: "Token Speed",
   async getData(ctx) {
-    const outputTokens = ctx.stdin.context_window?.total_output_tokens;
-    const apiDurationMs = ctx.stdin.cost?.total_api_duration_ms;
-    if (!outputTokens || !apiDurationMs || apiDurationMs <= 0)
+    const transcript = await getTranscript(ctx);
+    if (!transcript)
       return null;
-    const tokensPerSecond = outputTokens / (apiDurationMs / 1e3);
-    if (!Number.isFinite(tokensPerSecond) || tokensPerSecond <= 0)
+    const tokensPerSecond = ctx.config.tokenSpeedMode === "last" ? lastResponseRate(transcript) : sessionRate(transcript, ctx.stdin.cost?.total_api_duration_ms);
+    if (tokensPerSecond === null)
       return null;
     return { tokensPerSecond };
   },
@@ -4325,6 +4357,24 @@ var tokenSpeedWidget = {
     return colorize(`${ICON.zap} ${Math.round(data.tokensPerSecond)} tok/s`, getTheme().accent);
   }
 };
+function lastResponseRate(transcript) {
+  const { lastRequestOutput, lastRequestDurationMs } = transcript;
+  if (!lastRequestOutput || lastRequestOutput <= 0)
+    return null;
+  if (!lastRequestDurationMs || lastRequestDurationMs <= 0)
+    return null;
+  const rate = lastRequestOutput / (lastRequestDurationMs / 1e3);
+  return Number.isFinite(rate) && rate > 0 ? rate : null;
+}
+function sessionRate(transcript, apiDurationMs) {
+  if (!apiDurationMs || apiDurationMs <= 0)
+    return null;
+  const { totalOutputTokens } = transcript;
+  if (!totalOutputTokens || totalOutputTokens <= 0)
+    return null;
+  const rate = totalOutputTokens / (apiDurationMs / 1e3);
+  return Number.isFinite(rate) && rate > 0 ? rate : null;
+}
 
 // scripts/widgets/session-name.ts
 var sessionNameWidget = {

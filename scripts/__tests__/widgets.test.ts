@@ -99,7 +99,7 @@ import * as antigravityClient from '../utils/antigravity-client.js';
 import * as sessionUtils from '../utils/session.js';
 import * as budgetUtils from '../utils/budget.js';
 import * as transcriptParser from '../utils/transcript-parser.js';
-import type { WidgetContext, StdinInput, ModelData } from '../types.js';
+import type { WidgetContext, StdinInput, ModelData, ParsedTranscript, Config } from '../types.js';
 import { PRESET_CHAR_MAP } from '../types.js';
 import { MOCK_TRANSLATIONS, MOCK_CONFIG, MOCK_STDIN } from './fixtures.js';
 
@@ -112,12 +112,40 @@ function createStdin(overrides: Partial<StdinInput> = {}): StdinInput {
   return { ...MOCK_STDIN, ...overrides };
 }
 
-function createContext(stdinOverrides: Partial<StdinInput> = {}): WidgetContext {
+function createContext(
+  stdinOverrides: Partial<StdinInput> = {},
+  configOverrides: Partial<Config> = {}
+): WidgetContext {
   return {
     stdin: createStdin(stdinOverrides),
-    config: MOCK_CONFIG,
+    config: { ...MOCK_CONFIG, ...configOverrides },
     translations: MOCK_TRANSLATIONS,
     rateLimits: null,
+  };
+}
+
+/**
+ * Builds a ParsedTranscript with every field defaulted, so a test only states the
+ * field it cares about. ParsedTranscript is a wide accumulator that gains fields
+ * over time; spelling it out per test made every addition a four-site edit.
+ */
+function createTranscript(overrides: Partial<ParsedTranscript> = {}): ParsedTranscript {
+  return {
+    toolUses: new Map(),
+    completedToolCount: 0,
+    runningToolIds: new Set(),
+    lastTodoWriteInput: null,
+    activeAgentIds: new Set(),
+    completedAgentCount: 0,
+    tasks: new Map(),
+    nextTaskId: 1,
+    pendingTaskCreates: new Map(),
+    pendingTaskUpdates: new Map(),
+    activeSlashCommand: null,
+    totalOutputTokens: 0,
+    seenMessageIds: new Set(),
+    lastRequestOutput: 0,
+    ...overrides,
   };
 }
 
@@ -2230,7 +2258,13 @@ describe('widgets', () => {
       expect(tokenSpeedWidget.name).toBe('Token Speed');
     });
 
-    it('should return data when output tokens and api duration are present', async () => {
+    // Default mode is 'session'. stdin's per-response total_output_tokens must be
+    // ignored: pairing it with the session's cumulative API duration is the bug this
+    // widget was carrying since Claude Code 2.1.132 redefined the field.
+    it('should report the session average by default', async () => {
+      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(
+        createTranscript({ totalOutputTokens: 42000, lastRequestOutput: 1500, lastRequestDurationMs: 10000 })
+      );
       const ctx = createContext({
         context_window: {
           total_input_tokens: 5000,
@@ -2238,16 +2272,63 @@ describe('widgets', () => {
           context_window_size: 200000,
           current_usage: null,
         },
-        cost: { total_cost_usd: 0.5, total_api_duration_ms: 10000 },
+        cost: { total_cost_usd: 0.5, total_api_duration_ms: 600000 },
       });
       const data = await tokenSpeedWidget.getData(ctx);
 
-      expect(data).not.toBeNull();
-      // 3000 / (10000 / 1000) = 300
-      expect(data?.tokensPerSecond).toBe(300);
+      // 42000 / (600000 / 1000) = 70 — not 3000/600 = 5 (stdin, per-response over
+      // session), and not 1500/10 = 150 (the last-response rate).
+      expect(data?.tokensPerSecond).toBe(70);
+    });
+
+    it('should report the last response when tokenSpeedMode is last', async () => {
+      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(
+        createTranscript({ totalOutputTokens: 42000, lastRequestOutput: 1500, lastRequestDurationMs: 10000 })
+      );
+      const ctx = createContext(
+        { cost: { total_cost_usd: 0.5, total_api_duration_ms: 600000 } },
+        { tokenSpeedMode: 'last' }
+      );
+      const data = await tokenSpeedWidget.getData(ctx);
+
+      // 1500 / (10000 / 1000) = 150 — the session average (70) and stdin (5) must not leak in.
+      expect(data?.tokensPerSecond).toBe(150);
+    });
+
+    it('should return null in last mode when no span was measured', async () => {
+      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(
+        createTranscript({ totalOutputTokens: 42000, lastRequestOutput: 1500 })
+      );
+      const ctx = createContext(
+        { cost: { total_cost_usd: 0.5, total_api_duration_ms: 600000 } },
+        { tokenSpeedMode: 'last' }
+      );
+      expect(await tokenSpeedWidget.getData(ctx)).toBeNull();
+    });
+
+    it('should return null in last mode when the response produced no output', async () => {
+      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(
+        createTranscript({ lastRequestOutput: 0, lastRequestDurationMs: 10000 })
+      );
+      const ctx = createContext(
+        { cost: { total_cost_usd: 0.5, total_api_duration_ms: 600000 } },
+        { tokenSpeedMode: 'last' }
+      );
+      expect(await tokenSpeedWidget.getData(ctx)).toBeNull();
+    });
+
+    it('should return null when the transcript is unavailable', async () => {
+      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(null);
+      const ctx = createContext({
+        cost: { total_cost_usd: 0.5, total_api_duration_ms: 10000 },
+      });
+      expect(await tokenSpeedWidget.getData(ctx)).toBeNull();
     });
 
     it('should return null when total_api_duration_ms is missing', async () => {
+      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(
+        createTranscript({ totalOutputTokens: 42000 })
+      );
       const ctx = createContext({
         cost: { total_cost_usd: 0.5 },
       });
@@ -2256,6 +2337,9 @@ describe('widgets', () => {
     });
 
     it('should return null when total_api_duration_ms is 0', async () => {
+      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(
+        createTranscript({ totalOutputTokens: 42000 })
+      );
       const ctx = createContext({
         cost: { total_cost_usd: 0.5, total_api_duration_ms: 0 },
       });
@@ -2263,14 +2347,11 @@ describe('widgets', () => {
       expect(data).toBeNull();
     });
 
-    it('should return null when total_output_tokens is missing or 0', async () => {
+    it('should return null when the session has no output tokens yet', async () => {
+      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(
+        createTranscript({ totalOutputTokens: 0 })
+      );
       const ctx = createContext({
-        context_window: {
-          total_input_tokens: 5000,
-          total_output_tokens: 0,
-          context_window_size: 200000,
-          current_usage: null,
-        },
         cost: { total_cost_usd: 0.5, total_api_duration_ms: 5000 },
       });
       const data = await tokenSpeedWidget.getData(ctx);
@@ -2308,19 +2389,7 @@ describe('widgets', () => {
     });
 
     it('should return null when transcript has no sessionName', async () => {
-      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue({
-        toolUses: new Map(),
-        completedToolCount: 0,
-        runningToolIds: new Set(),
-        lastTodoWriteInput: null,
-        activeAgentIds: new Set(),
-        completedAgentCount: 0,
-        tasks: new Map(),
-        nextTaskId: 1,
-        pendingTaskCreates: new Map(),
-        pendingTaskUpdates: new Map(),
-        activeSlashCommand: null,
-      });
+      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(createTranscript());
 
       const ctx = createContext({ transcript_path: '/tmp/transcript.jsonl' });
       const data = await sessionNameWidget.getData(ctx);
@@ -2335,20 +2404,7 @@ describe('widgets', () => {
     });
 
     it('should return session name from transcript', async () => {
-      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue({
-        toolUses: new Map(),
-        completedToolCount: 0,
-        runningToolIds: new Set(),
-        lastTodoWriteInput: null,
-        activeAgentIds: new Set(),
-        completedAgentCount: 0,
-        tasks: new Map(),
-        nextTaskId: 1,
-        pendingTaskCreates: new Map(),
-        pendingTaskUpdates: new Map(),
-        activeSlashCommand: null,
-        sessionName: 'my-feature-work',
-      });
+      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(createTranscript({ sessionName: 'my-feature-work' }));
 
       const ctx = createContext({ transcript_path: '/tmp/transcript.jsonl' });
       const data = await sessionNameWidget.getData(ctx);
@@ -2762,19 +2818,7 @@ describe('widgets', () => {
     });
 
     it('should return null when transcript has no active slash command', async () => {
-      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue({
-        toolUses: new Map(),
-        completedToolCount: 0,
-        runningToolIds: new Set(),
-        lastTodoWriteInput: null,
-        activeAgentIds: new Set(),
-        completedAgentCount: 0,
-        tasks: new Map(),
-        nextTaskId: 1,
-        pendingTaskCreates: new Map(),
-        pendingTaskUpdates: new Map(),
-        activeSlashCommand: null,
-      });
+      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(createTranscript());
 
       const ctx = createContext({ transcript_path: '/tmp/transcript.jsonl' });
       const data = await slashCommandWidget.getData(ctx);
@@ -2782,19 +2826,11 @@ describe('widgets', () => {
     });
 
     it('should return active slash command from transcript', async () => {
-      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue({
-        toolUses: new Map(),
-        completedToolCount: 0,
-        runningToolIds: new Set(),
-        lastTodoWriteInput: null,
-        activeAgentIds: new Set(),
-        completedAgentCount: 0,
-        tasks: new Map(),
-        nextTaskId: 1,
-        pendingTaskCreates: new Map(),
-        pendingTaskUpdates: new Map(),
-        activeSlashCommand: { name: '/superpowers:brainstorming', startTime: 1234567890 },
-      });
+      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(
+        createTranscript({
+          activeSlashCommand: { name: '/superpowers:brainstorming', startTime: 1234567890 },
+        })
+      );
 
       const ctx = createContext({ transcript_path: '/tmp/transcript.jsonl' });
       const data = await slashCommandWidget.getData(ctx);

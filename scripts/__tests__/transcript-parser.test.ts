@@ -1137,4 +1137,86 @@ describe('transcript-parser', () => {
       expect(getActiveSlashCommand(transcript!)).toBeNull();
     });
   });
+
+  describe('token accounting', () => {
+    // A response streams in as several records sharing one message id, and the usage
+    // block repeats on each — the leading ones usually carry output_tokens: 0, with
+    // the real count on the last. Marking an id as counted on first sight would bank
+    // the zeroes and drop the response, so the accumulator only counts non-zero values.
+    it('counts a response once, at its non-zero value', async () => {
+      await writeTranscript([
+        { type: 'user', timestamp: '2024-01-01T00:00:00.000Z', message: { content: 'hi' } },
+        { type: 'assistant', timestamp: '2024-01-01T00:00:05.000Z', message: { id: 'msg_a', usage: { output_tokens: 0 } } },
+        { type: 'assistant', timestamp: '2024-01-01T00:00:06.000Z', message: { id: 'msg_a', usage: { output_tokens: 1200 } } },
+        { type: 'assistant', timestamp: '2024-01-01T00:00:06.100Z', message: { id: 'msg_a', usage: { output_tokens: 1200 } } },
+      ]);
+
+      const { parseTranscript } = await import('../utils/transcript-parser.js');
+      const transcript = await parseTranscript(TEST_FILE);
+
+      expect(transcript!.totalOutputTokens).toBe(1200);
+    });
+
+    it('sums output tokens across responses', async () => {
+      await writeTranscript([
+        { type: 'user', timestamp: '2024-01-01T00:00:00.000Z', message: { content: 'one' } },
+        { type: 'assistant', timestamp: '2024-01-01T00:00:05.000Z', message: { id: 'msg_a', usage: { output_tokens: 100 } } },
+        { type: 'user', timestamp: '2024-01-01T00:00:10.000Z', message: { content: 'two' } },
+        { type: 'assistant', timestamp: '2024-01-01T00:00:15.000Z', message: { id: 'msg_b', usage: { output_tokens: 200 } } },
+      ]);
+
+      const { parseTranscript } = await import('../utils/transcript-parser.js');
+      const transcript = await parseTranscript(TEST_FILE);
+
+      expect(transcript!.totalOutputTokens).toBe(300);
+    });
+
+    // The span must start at the turn that triggered the request. A response's own
+    // first-to-last record gap covers only the tail of the stream and would overstate
+    // the rate several-fold.
+    it('measures the newest response from the preceding turn', async () => {
+      await writeTranscript([
+        { type: 'user', timestamp: '2024-01-01T00:00:00.000Z', message: { content: 'one' } },
+        { type: 'assistant', timestamp: '2024-01-01T00:00:05.000Z', message: { id: 'msg_a', usage: { output_tokens: 100 } } },
+        { type: 'user', timestamp: '2024-01-01T00:00:10.000Z', message: { content: 'two' } },
+        { type: 'assistant', timestamp: '2024-01-01T00:00:12.000Z', message: { id: 'msg_b', usage: { output_tokens: 400 } } },
+      ]);
+
+      const { parseTranscript } = await import('../utils/transcript-parser.js');
+      const transcript = await parseTranscript(TEST_FILE);
+
+      expect(transcript!.lastRequestOutput).toBe(400);
+      // 00:00:10 → 00:00:12, not 00:00:12 minus the response's own first record.
+      expect(transcript!.lastRequestDurationMs).toBe(2000);
+    });
+
+    it('keeps the newest response when an earlier one had more output', async () => {
+      await writeTranscript([
+        { type: 'user', timestamp: '2024-01-01T00:00:00.000Z', message: { content: 'one' } },
+        { type: 'assistant', timestamp: '2024-01-01T00:00:05.000Z', message: { id: 'msg_a', usage: { output_tokens: 900 } } },
+        { type: 'user', timestamp: '2024-01-01T00:00:10.000Z', message: { content: 'two' } },
+        { type: 'assistant', timestamp: '2024-01-01T00:00:11.000Z', message: { id: 'msg_b', usage: { output_tokens: 50 } } },
+      ]);
+
+      const { parseTranscript } = await import('../utils/transcript-parser.js');
+      const transcript = await parseTranscript(TEST_FILE);
+
+      expect(transcript!.lastRequestOutput).toBe(50);
+      expect(transcript!.lastRequestDurationMs).toBe(1000);
+      // ...while the session total still holds both.
+      expect(transcript!.totalOutputTokens).toBe(950);
+    });
+
+    it('leaves the span unset when no turn precedes the response', async () => {
+      await writeTranscript([
+        { type: 'assistant', timestamp: '2024-01-01T00:00:05.000Z', message: { id: 'msg_a', usage: { output_tokens: 100 } } },
+      ]);
+
+      const { parseTranscript } = await import('../utils/transcript-parser.js');
+      const transcript = await parseTranscript(TEST_FILE);
+
+      expect(transcript!.lastRequestOutput).toBe(100);
+      expect(transcript!.lastRequestDurationMs).toBeUndefined();
+    });
+  });
 });

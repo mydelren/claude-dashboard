@@ -293,8 +293,8 @@ Agent: 3 done
 | Property | Value |
 |----------|-------|
 | **Widget ID** | `tokenSpeed` |
-| **Data Source** | stdin (output tokens + timing) |
-| **Description** | Shows the output token generation speed in tokens per second. |
+| **Data Source** | transcript (output tokens + turn timing) |
+| **Description** | Shows the output token generation speed in tokens per second. The span it averages over is set by `tokenSpeedMode`: `session` (default) covers the whole conversation over the session's cumulative API duration, so the figure moves slowly and answers "how fast has this session been"; `last` covers the most recent response alone, so it answers "how fast was that response". The widget hides until the transcript yields output tokens, and in `last` mode until a response has a measurable span. |
 
 **Example output:**
 ```

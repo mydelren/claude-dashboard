@@ -52,7 +52,7 @@ claude-dashboard provides 40 widgets organized by category. Each widget can be i
 | Widget | Description |
 |--------|-------------|
 | `burnRate` | Token consumption per minute |
-| `tokenSpeed` | Output token generation speed (e.g., `67 tok/s`) |
+| `tokenSpeed` | Output token generation speed (e.g., `67 tok/s`). Scope set by `tokenSpeedMode` — session average (default) or last response |
 | `cacheHit` | Cache hit rate percentage (last request) |
 | `promptCache` | Session prompt-cache health: ♨️ warm with time left before it goes cold / ❄️ cold, hit ratio, miss count (Claude Code ≥ 2.1.251) |
 | `promptCacheState` | Warm/cold icon + time left only (sub-widget of `promptCache`) |
