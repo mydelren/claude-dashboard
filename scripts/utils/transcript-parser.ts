@@ -253,10 +253,16 @@ function processEntries(
  * that triggered it to its latest record — the response's own first-to-last record
  * gap covers only the tail of the stream and would overstate the rate.
  */
+/** A request counts toward session totals only once it has both output and a span. */
+function isMeasured(outputTokens: number, durationMs?: number): boolean {
+  return outputTokens > 0 && durationMs !== undefined && durationMs > 0;
+}
+
 function accountTokens(existing: ParsedTranscript, entry: TranscriptEntry): void {
   // Subagent records interleave with the main thread and would both move the
   // boundary and switch the tracked request id.
   if (entry.isSidechain) return;
+  if (entry.type !== 'user' && entry.type !== 'assistant') return;
 
   const t = entry.timestamp ? Date.parse(entry.timestamp) : NaN;
 
@@ -266,7 +272,6 @@ function accountTokens(existing: ParsedTranscript, entry: TranscriptEntry): void
     if (Number.isFinite(t)) existing.lastBoundaryAt = t;
     return;
   }
-  if (entry.type !== 'assistant') return;
 
   const msg = entry.message as { id?: string; usage?: { output_tokens?: number } } | undefined;
   const msgId = msg?.id;
@@ -297,12 +302,11 @@ function accountTokens(existing: ParsedTranscript, entry: TranscriptEntry): void
 
   // Session totals hold only requests with both a count and a span, so the two
   // halves of the ratio always cover the same requests. Apply this request's delta.
-  const measured = (o: number, ms?: number) => o > 0 && ms !== undefined && ms > 0;
-  if (measured(prevOut, prevMs)) {
+  if (isMeasured(prevOut, prevMs)) {
     existing.sessionOutputTokens -= prevOut;
     existing.sessionRequestMs -= prevMs!;
   }
-  if (measured(existing.lastRequestOutput, existing.lastRequestDurationMs)) {
+  if (isMeasured(existing.lastRequestOutput, existing.lastRequestDurationMs)) {
     existing.sessionOutputTokens += existing.lastRequestOutput;
     existing.sessionRequestMs += existing.lastRequestDurationMs!;
   }

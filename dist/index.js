@@ -2035,8 +2035,13 @@ function processEntries(entries, existing) {
     accountTokens(existing, entry);
   }
 }
+function isMeasured(outputTokens, durationMs) {
+  return outputTokens > 0 && durationMs !== void 0 && durationMs > 0;
+}
 function accountTokens(existing, entry) {
   if (entry.isSidechain)
+    return;
+  if (entry.type !== "user" && entry.type !== "assistant")
     return;
   const t = entry.timestamp ? Date.parse(entry.timestamp) : NaN;
   if (entry.type === "user") {
@@ -2044,8 +2049,6 @@ function accountTokens(existing, entry) {
       existing.lastBoundaryAt = t;
     return;
   }
-  if (entry.type !== "assistant")
-    return;
   const msg = entry.message;
   const msgId = msg?.id;
   if (!msgId)
@@ -2065,12 +2068,11 @@ function accountTokens(existing, entry) {
   if (Number.isFinite(t) && start !== void 0 && t > start) {
     existing.lastRequestDurationMs = t - start;
   }
-  const measured = (o, ms) => o > 0 && ms !== void 0 && ms > 0;
-  if (measured(prevOut, prevMs)) {
+  if (isMeasured(prevOut, prevMs)) {
     existing.sessionOutputTokens -= prevOut;
     existing.sessionRequestMs -= prevMs;
   }
-  if (measured(existing.lastRequestOutput, existing.lastRequestDurationMs)) {
+  if (isMeasured(existing.lastRequestOutput, existing.lastRequestDurationMs)) {
     existing.sessionOutputTokens += existing.lastRequestOutput;
     existing.sessionRequestMs += existing.lastRequestDurationMs;
   }
