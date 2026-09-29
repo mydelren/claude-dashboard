@@ -308,7 +308,7 @@ Agent: 3 done
 |----------|-------|
 | **Widget ID** | `tokenSpeedLast` |
 | **Data Source** | transcript (output tokens + turn timing) |
-| **Description** | Output speed of the most recent response alone, measured the same way as `tokenSpeed`. Labelled so it can sit next to `tokenSpeed`. Hidden until a response has both output and a measurable span. |
+| **Description** | Output speed of the most recent response alone, measured the same way as `tokenSpeed`. Labelled so it can sit next to `tokenSpeed`. Short responses (e.g. a lone tool call) read low because time-to-first-token dominates their span — that is the real end-to-end rate of that request, not a parsing error. Hidden until a response has both output and a measurable span. |
 
 **Example output:**
 ```
