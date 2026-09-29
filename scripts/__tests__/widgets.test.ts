@@ -144,7 +144,6 @@ function createTranscript(overrides: Partial<ParsedTranscript> = {}): ParsedTran
     activeSlashCommand: null,
     sessionOutputTokens: 0,
     sessionRequestMs: 0,
-    seenRequestIds: new Set(),
     lastRequestOutput: 0,
     ...overrides,
   };

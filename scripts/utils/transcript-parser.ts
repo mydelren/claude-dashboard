@@ -48,7 +48,6 @@ function createParsedTranscript(): ParsedTranscript {
     activeSlashCommand: null,
     sessionOutputTokens: 0,
     sessionRequestMs: 0,
-    seenRequestIds: new Set(),
     lastRequestOutput: 0,
   };
 }
@@ -255,6 +254,10 @@ function processEntries(
  * gap covers only the tail of the stream and would overstate the rate.
  */
 function accountTokens(existing: ParsedTranscript, entry: TranscriptEntry): void {
+  // Subagent records interleave with the main thread and would both move the
+  // boundary and switch the tracked request id.
+  if (entry.isSidechain) return;
+
   const t = entry.timestamp ? Date.parse(entry.timestamp) : NaN;
 
   if (entry.type === 'user') {
@@ -269,11 +272,10 @@ function accountTokens(existing: ParsedTranscript, entry: TranscriptEntry): void
   const msgId = msg?.id;
   if (!msgId) return;
 
+  // O(1) state: main-thread records of one response are contiguous, so tracking the
+  // newest id is enough to dedupe. This state survives incremental reads, so a
+  // response split across two reads is still counted once.
   if (msgId !== existing.lastRequestId) {
-    // An id already finished once is a replayed record; counting it again would
-    // double the session total.
-    if (existing.seenRequestIds.has(msgId)) return;
-    existing.seenRequestIds.add(msgId);
     existing.lastRequestId = msgId;
     existing.lastRequestOutput = 0;
     existing.lastRequestDurationMs = undefined;

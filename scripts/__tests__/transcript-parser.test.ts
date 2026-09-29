@@ -3,7 +3,7 @@
  * @covers scripts/utils/transcript-parser.ts
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdir, writeFile, rm } from 'fs/promises';
+import { mkdir, writeFile, appendFile, rm } from 'fs/promises';
 import path from 'path';
 import os from 'os';
 
@@ -1267,20 +1267,39 @@ describe('transcript-parser', () => {
       expect(transcript!.sessionRequestMs).toBe(4000);
     });
 
-    it('does not count a replayed response twice', async () => {
+    it('ignores sidechain records', async () => {
       await writeTranscript([
-        { type: 'user', timestamp: '2024-01-01T00:00:00.000Z', message: { content: 'one' } },
-        { type: 'assistant', timestamp: '2024-01-01T00:00:02.000Z', message: { id: 'msg_a', usage: { output_tokens: 100 } } },
-        { type: 'user', timestamp: '2024-01-01T00:00:10.000Z', message: { content: 'two' } },
-        { type: 'assistant', timestamp: '2024-01-01T00:00:12.000Z', message: { id: 'msg_b', usage: { output_tokens: 200 } } },
-        { type: 'assistant', timestamp: '2024-01-01T00:00:13.000Z', message: { id: 'msg_a', usage: { output_tokens: 100 } } },
+        { type: 'user', timestamp: '2024-01-01T00:00:00.000Z', message: { content: 'hi' } },
+        { type: 'user', isSidechain: true, timestamp: '2024-01-01T00:00:01.000Z', message: { content: 'sub task' } },
+        { type: 'assistant', isSidechain: true, timestamp: '2024-01-01T00:00:02.000Z', message: { id: 'msg_sub', usage: { output_tokens: 999 } } },
+        { type: 'assistant', timestamp: '2024-01-01T00:00:04.000Z', message: { id: 'msg_a', usage: { output_tokens: 400 } } },
       ]);
 
       const { parseTranscript } = await import('../utils/transcript-parser.js');
       const transcript = await parseTranscript(TEST_FILE);
 
-      expect(transcript!.sessionOutputTokens).toBe(300);
-      expect(transcript!.lastRequestOutput).toBe(200);
+      expect(transcript!.sessionOutputTokens).toBe(400);
+      expect(transcript!.lastRequestDurationMs).toBe(4000);
+    });
+
+    // A response whose records straddle two incremental reads must be counted once,
+    // at its final value.
+    it('counts a response split across incremental reads once', async () => {
+      await writeTranscript([
+        { type: 'user', timestamp: '2024-01-01T00:00:00.000Z', message: { content: 'hi' } },
+        { type: 'assistant', timestamp: '2024-01-01T00:00:02.000Z', message: { id: 'msg_a', usage: { output_tokens: 300 } } },
+      ]);
+      const { parseTranscript } = await import('../utils/transcript-parser.js');
+      await parseTranscript(TEST_FILE);
+
+      await appendFile(
+        TEST_FILE,
+        JSON.stringify({ type: 'assistant', timestamp: '2024-01-01T00:00:05.000Z', message: { id: 'msg_a', usage: { output_tokens: 1000 } } }) + '\n'
+      );
+      const transcript = await parseTranscript(TEST_FILE);
+
+      expect(transcript!.sessionOutputTokens).toBe(1000);
+      expect(transcript!.sessionRequestMs).toBe(5000);
     });
   });
 });

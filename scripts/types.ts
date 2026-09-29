@@ -30,6 +30,11 @@ export interface StdinInput {
     original_branch?: string;
   };
   context_window: {
+    /**
+     * Since Claude Code 2.1.132 these two are current-context values from the most
+     * recent API response, not session totals. Session totals must come from the
+     * transcript (see ParsedTranscript token accounting).
+     */
     total_input_tokens: number;
     total_output_tokens: number;
     context_window_size: number;
@@ -48,7 +53,11 @@ export interface StdinInput {
     total_cost_usd: number;
     /** Total session duration in milliseconds from Claude Code stdin */
     total_duration_ms?: number;
-    /** Total time spent in API calls in ms (excludes user/tool time) */
+    /**
+     * Total time spent in API calls in ms (excludes user/tool time). Process-wide:
+     * includes subagent, compaction and side-query calls, so it does not pair with
+     * main-transcript token counts.
+     */
     total_api_duration_ms?: number;
     /** Total lines added in the session */
     total_lines_added?: number;
@@ -955,6 +964,8 @@ export type WidgetData =
 export interface TranscriptEntry {
   type: 'assistant' | 'user' | 'tool_result' | 'system';
   timestamp?: string;
+  /** True for subagent records written into the main transcript (older Claude Code) */
+  isSidechain?: boolean;
   /** Session name set by /rename command */
   customTitle?: string;
   message?: {
@@ -1020,8 +1031,6 @@ export interface ParsedTranscript {
   sessionOutputTokens: number;
   /** Summed wall-clock spans of the same requests, in ms */
   sessionRequestMs: number;
-  /** Message ids already seen, so a replayed record is not counted twice */
-  seenRequestIds: Set<string>;
   /** Output tokens of the newest API response */
   lastRequestOutput: number;
   /** Wall-clock span of the newest API response in ms; undefined until measurable */

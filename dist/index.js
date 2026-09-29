@@ -1898,7 +1898,6 @@ function createParsedTranscript() {
     activeSlashCommand: null,
     sessionOutputTokens: 0,
     sessionRequestMs: 0,
-    seenRequestIds: /* @__PURE__ */ new Set(),
     lastRequestOutput: 0
   };
 }
@@ -2037,6 +2036,8 @@ function processEntries(entries, existing) {
   }
 }
 function accountTokens(existing, entry) {
+  if (entry.isSidechain)
+    return;
   const t = entry.timestamp ? Date.parse(entry.timestamp) : NaN;
   if (entry.type === "user") {
     if (Number.isFinite(t))
@@ -2050,9 +2051,6 @@ function accountTokens(existing, entry) {
   if (!msgId)
     return;
   if (msgId !== existing.lastRequestId) {
-    if (existing.seenRequestIds.has(msgId))
-      return;
-    existing.seenRequestIds.add(msgId);
     existing.lastRequestId = msgId;
     existing.lastRequestOutput = 0;
     existing.lastRequestDurationMs = void 0;
