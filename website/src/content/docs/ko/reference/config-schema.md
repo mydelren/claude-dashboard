@@ -21,7 +21,6 @@ sidebar:
 | `preset` | `string` | - | 프리셋 단축키 문자열. 설정 시 `displayMode`를 `'custom'`으로 변경합니다. |
 | `dailyBudget` | `number` | - | 일일 예산 한도 (USD). 설정 시 `budget` 위젯이 활성화됩니다. |
 | `tagPatterns` | `string[]` | `["v*"]` | `tagStatus` 위젯용 glob 패턴 목록. 각 패턴은 HEAD에서 도달 가능한 최신 태그 하나에 매칭됩니다. 어떤 패턴도 매칭되지 않으면 위젯이 숨겨집니다. |
-| `tokenSpeedMode` | `"session" \| "last"` | `"session"` | `tokenSpeed` 위젯이 평균을 낼 구간. `"session"`은 세션 누적 API 시간 대비 전체 대화의 출력 토큰을, `"last"`는 가장 최근 응답 하나의 속도를 표시합니다. |
 | `cache` | `{ ttlSeconds: number }` | `{ ttlSeconds: 300 }` | API 캐시 설정. |
 
 ## DisplayMode
@@ -85,7 +84,7 @@ type WidgetId =
   | 'projectInfo' | 'configCounts'
   | 'sessionDuration' | 'sessionId' | 'sessionIdFull' | 'sessionName'
   | 'toolActivity' | 'agentStatus' | 'todoProgress'
-  | 'burnRate' | 'tokenSpeed' | 'depletionTime' | 'cacheHit' | 'promptCache'
+  | 'burnRate' | 'tokenSpeed' | 'tokenSpeedLast' | 'depletionTime' | 'cacheHit' | 'promptCache'
   | 'promptCacheState' | 'promptCacheHit' | 'promptCacheMisses'
   | 'codexUsage' | 'geminiUsage' | 'geminiUsageAll'
   | 'antigravityUsage' | 'antigravityUsageAll' | 'zaiUsage'

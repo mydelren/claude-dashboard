@@ -52,7 +52,8 @@ claude-dashboard는 40개의 위젯을 제공합니다. 각 위젯은 독립적�
 | 위젯 | ID | 설명 |
 |------|-----|------|
 | 번 레이트 | `burnRate` | 분당 토큰 소비량 |
-| 토큰 속도 | `tokenSpeed` | 출력 토큰 생성 속도. `tokenSpeedMode`로 범위 선택 (기본값 세션 평균 / 마지막 응답) |
+| 토큰 속도 | `tokenSpeed` | 출력 토큰 생성 속도 (세션 평균) |
+| 최근 응답 속도 | `tokenSpeedLast` | 가장 최근 응답 하나의 출력 토큰 생성 속도 |
 | 캐시 히트율 | `cacheHit` | 캐시 히트율 백분율 (마지막 요청 기준) |
 | 프롬프트 캐시 | `promptCache` | 세션 프롬프트 캐시 상태: ♨️ warm + 만료까지 남은 시간 / ❄️ cold, 히트율, 미스 횟수 (Claude Code 2.1.251 이상) |
 | 프롬프트 캐시 상태 | `promptCacheState` | warm/cold 아이콘 + 남은 시간만 (`promptCache`의 서브 위젯) |

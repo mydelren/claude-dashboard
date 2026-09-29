@@ -21,7 +21,6 @@ The configuration file is located at `~/.claude/claude-dashboard.local.json`. Th
 | `preset` | `string` | -- | Preset shorthand string for quick layout. When set, overrides `displayMode` with `"custom"` and generates `lines` from the string. |
 | `dailyBudget` | `number` | -- | Daily budget limit in USD. Enables the `budget` widget. |
 | `tagPatterns` | `string[]` | `["v*"]` | Glob patterns for the `tagStatus` widget. Each pattern resolves to at most one tag (the most recent reachable from HEAD). Widget hides when no pattern matches a tag. |
-| `tokenSpeedMode` | `"session" \| "last"` | `"session"` | Span the `tokenSpeed` widget averages over. `"session"` reports the whole conversation's output tokens over the session's cumulative API duration; `"last"` reports the most recent response's own throughput. |
 | `cache` | `{ ttlSeconds: number }` | `{ ttlSeconds: 300 }` | Cache settings. `ttlSeconds` controls how long API responses are cached. |
 
 ## DisplayMode
@@ -78,7 +77,7 @@ type WidgetId =
   | 'projectInfo' | 'configCounts'
   | 'sessionDuration' | 'sessionId' | 'sessionIdFull' | 'sessionName'
   | 'toolActivity' | 'agentStatus' | 'todoProgress'
-  | 'burnRate' | 'tokenSpeed' | 'depletionTime' | 'cacheHit' | 'promptCache'
+  | 'burnRate' | 'tokenSpeed' | 'tokenSpeedLast' | 'depletionTime' | 'cacheHit' | 'promptCache'
   | 'promptCacheState' | 'promptCacheHit' | 'promptCacheMisses'
   | 'codexUsage' | 'geminiUsage' | 'geminiUsageAll'
   | 'antigravityUsage' | 'antigravityUsageAll' | 'zaiUsage'

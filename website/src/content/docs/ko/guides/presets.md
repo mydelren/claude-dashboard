@@ -47,7 +47,7 @@ sidebar:
 | `h` | promptCacheHit | `x` | promptCacheMisses |
 | `#` | contextUsage | `/` | slashCommand |
 | `g` | agentMode | `f` | rateLimit7dFable |
-| `^` | antigravityUsage | | |
+| `^` | antigravityUsage | `q` | tokenSpeedLast |
 
 `antigravityUsageAll`은 프리셋 문자가 없습니다(`geminiUsageAll`과 동일). custom 모드의 `lines`에서 직접 지정하세요.
 

@@ -294,12 +294,25 @@ Agent: 3 done
 |----------|-------|
 | **Widget ID** | `tokenSpeed` |
 | **Data Source** | transcript (output tokens + turn timing) |
-| **Description** | Shows the output token generation speed in tokens per second. The span it averages over is set by `tokenSpeedMode`: `session` (default) covers the whole conversation over the session's cumulative API duration, so the figure moves slowly and answers "how fast has this session been"; `last` covers the most recent response alone, so it answers "how fast was that response". The widget hides until the transcript yields output tokens, and in `last` mode until a response has a measurable span. |
+| **Description** | Session-average output speed: the main conversation's output tokens over the summed wall-clock span of its requests (each measured from the triggering prompt or tool result, so time-to-first-token is included). Subagent calls are excluded. Moves slowly in a long session — use `tokenSpeedLast` for the latest response. Hidden until a request has been measured. |
 
 **Example output:**
 ```
 ⚡ 67 tok/s
 ⚡ 120 tok/s
+```
+
+### tokenSpeedLast
+
+| Property | Value |
+|----------|-------|
+| **Widget ID** | `tokenSpeedLast` |
+| **Data Source** | transcript (output tokens + turn timing) |
+| **Description** | Output speed of the most recent response alone, measured the same way as `tokenSpeed`. Labelled so it can sit next to `tokenSpeed`. Hidden until a response has both output and a measurable span. |
+
+**Example output:**
+```
+⚡ last 150 tok/s
 ```
 
 ### cacheHit

@@ -55,7 +55,7 @@ claude-dashboard/
 │   │   ├── performance.ts   # Performance badge widget
 │   │   ├── forecast.ts      # Cost forecast widget
 │   │   ├── budget.ts        # Budget tracking widget
-│   │   ├── token-speed.ts   # Token speed widget
+│   │   ├── token-speed.ts   # Token speed widgets (session + last response)
 │   │   ├── session-name.ts  # Session name widget
 │   │   ├── today-cost.ts    # Today cost widget
 │   │   ├── last-prompt.ts   # Last prompt widget
@@ -177,7 +177,8 @@ interface Widget<T extends WidgetData> {
 | `linesChanged` | git | Lines added/removed count (including untracked files) |
 | `outputStyle` | stdin | Current output style |
 | `version` | stdin | Claude Code version display |
-| `tokenSpeed` | stdin | Output token generation speed (tok/s) |
+| `tokenSpeed` | transcript | Session-average output speed (tok/s): main-thread output tokens ÷ summed request wall-clock spans. Not stdin — `total_output_tokens` is per-response since 2.1.132 and `total_api_duration_ms` includes subagent calls |
+| `tokenSpeedLast` | transcript | Output speed of the most recent response only, labelled `last` |
 | `sessionName` | transcript | Session name from /rename command |
 | `todayCost` | stdin + file | Total spending across all sessions today |
 | `lastPrompt` | transcript | Last user prompt with timestamp |
@@ -245,7 +246,7 @@ Quick widget layout via single-character shorthand. Set `"preset"` in config, us
 | `g` | agentMode | `f` | rateLimit7dFable |
 | `^` | antigravityUsage | `c` | promptCache |
 | `w` | promptCacheState | `h` | promptCacheHit |
-| `x` | promptCacheMisses | | |
+| `x` | promptCacheMisses | `q` | tokenSpeedLast |
 
 ### Theme System
 

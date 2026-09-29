@@ -47,7 +47,7 @@ This creates a 2-line layout:
 | `h` | promptCacheHit | `x` | promptCacheMisses |
 | `#` | contextUsage | `/` | slashCommand |
 | `g` | agentMode | `f` | rateLimit7dFable |
-| `^` | antigravityUsage | | |
+| `^` | antigravityUsage | `q` | tokenSpeedLast |
 
 `antigravityUsageAll` has no preset character (same as `geminiUsageAll`); add it through `lines` in custom mode.
 
