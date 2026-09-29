@@ -2310,6 +2310,10 @@ describe('widgets', () => {
       expect(tokenSpeedLastWidget.id).toBe('tokenSpeedLast');
     });
 
+    it('should be reachable via preset char q', () => {
+      expect(PRESET_CHAR_MAP.q).toBe('tokenSpeedLast');
+    });
+
     it('should report the newest response alone', async () => {
       vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(
         createTranscript({
