@@ -53,7 +53,7 @@ import { budgetWidget } from './budget.js';
 import { versionWidget } from './version.js';
 import { linesChangedWidget } from './lines-changed.js';
 import { outputStyleWidget } from './output-style.js';
-import { tokenSpeedWidget } from './token-speed.js';
+import { tokenSpeedWidget, tokenSpeedLastWidget } from './token-speed.js';
 import { sessionNameWidget } from './session-name.js';
 import { todayCostWidget } from './today-cost.js';
 import { lastPromptWidget } from './last-prompt.js';
@@ -107,6 +107,7 @@ const widgetRegistry = new Map<WidgetId, Widget>([
   ['linesChanged', linesChangedWidget],
   ['outputStyle', outputStyleWidget],
   ['tokenSpeed', tokenSpeedWidget],
+  ['tokenSpeedLast', tokenSpeedLastWidget],
   ['sessionName', sessionNameWidget],
   ['todayCost', todayCostWidget],
   ['lastPrompt', lastPromptWidget],

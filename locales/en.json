@@ -36,6 +36,7 @@
     "hooks": "Hooks",
     "burnRate": "Rate",
     "cache": "Cache",
+    "tokenSpeedLast": "last",
     "cacheMiss": "miss",
     "toLimit": "to",
     "forecast": "Forecast",

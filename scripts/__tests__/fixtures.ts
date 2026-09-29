@@ -34,6 +34,7 @@ export const MOCK_TRANSLATIONS: Translations = {
     apiDuration: 'API',
     peakHours: 'Peak',
     offPeak: 'Off-Peak',
+    tokenSpeedLast: 'last',
     cacheMiss: 'miss',
   },
   checkUsage: {

@@ -180,6 +180,7 @@ export type WidgetId =
   | 'linesChanged'
   | 'outputStyle'
   | 'tokenSpeed'
+  | 'tokenSpeedLast'
   | 'sessionName'
   | 'todayCost'
   | 'lastPrompt'
@@ -233,11 +234,6 @@ export type SeparatorStyle = 'pipe' | 'space' | 'dot' | 'arrow';
 /**
  * User configuration stored in ~/.claude/claude-dashboard.local.json
  */
-/**
- * Span that tokenSpeed averages over. See Config.tokenSpeedMode.
- */
-export type TokenSpeedMode = 'session' | 'last';
-
 export interface Config {
   language: 'en' | 'ko' | 'auto';
   plan: 'pro' | 'max';
@@ -265,12 +261,6 @@ export interface Config {
    * tag (the most recent reachable from HEAD). Defaults to ['v*'].
    */
   tagPatterns?: string[];
-  /**
-   * What span the tokenSpeed widget averages over. `'session'` (default) reports
-   * the whole conversation's output tokens over the session's cumulative API
-   * duration; `'last'` reports the most recent response's own throughput.
-   */
-  tokenSpeedMode?: TokenSpeedMode;
   cache: {
     ttlSeconds: number;
   };
@@ -317,6 +307,7 @@ export const PRESET_CHAR_MAP: Record<string, WidgetId> = {
   L: 'linesChanged',
   Y: 'outputStyle',
   Q: 'tokenSpeed',
+  q: 'tokenSpeedLast',
   J: 'sessionName',
   '@': 'todayCost',
   '?': 'lastPrompt',
@@ -351,7 +342,6 @@ export const DEFAULT_CONFIG: Config = {
   language: 'auto',
   plan: 'max',
   displayMode: 'compact',
-  tokenSpeedMode: 'session',
   cache: {
     ttlSeconds: 300,
   },
@@ -398,6 +388,7 @@ export interface Translations {
     hooks: string;
     burnRate: string;
     cache: string;
+    tokenSpeedLast: string;
     cacheMiss: string;
     toLimit: string;
     forecast: string;
@@ -834,7 +825,7 @@ export interface OutputStyleData {
  * @invariant tokensPerSecond >= 0 (enforced in widget)
  */
 export interface TokenSpeedData {
-  /** Output tokens per second of API time. Always >= 0. */
+  /** Output tokens per second of request wall-clock time. Always >= 0. */
   tokensPerSecond: number;
 }
 
@@ -1018,28 +1009,28 @@ export interface ParsedTranscript {
   /** Slash command name + start time, cleared when a plain user message arrives */
   activeSlashCommand: SlashCommandData | null;
 
-  // --- Token accounting (tokenSpeed widget) ---
+  // --- Token accounting (tokenSpeed / tokenSpeedLast widgets) ---
   //
-  // Kept here rather than read from stdin: Claude Code 2.1.132 changed
+  // Derived from the transcript rather than stdin: Claude Code 2.1.132 changed
   // context_window's token counts from session totals to current-context values,
-  // so stdin no longer carries a session total to divide by API duration.
+  // and cost.total_api_duration_ms also counts subagent and side-query calls whose
+  // output never reaches this transcript.
 
-  /** Session-wide output tokens for the main conversation, deduped by message id */
-  totalOutputTokens: number;
-  /**
-   * Message ids whose output tokens are already counted. A response streams in as
-   * several records sharing one id, and only the last carries the real count, so
-   * an id is marked when its non-zero value is added — marking it on first sight
-   * would bank the leading zeroes and drop the response entirely.
-   */
-  seenMessageIds: Set<string>;
+  /** Output tokens of every main-conversation request with a measured span */
+  sessionOutputTokens: number;
+  /** Summed wall-clock spans of the same requests, in ms */
+  sessionRequestMs: number;
+  /** Message ids already seen, so a replayed record is not counted twice */
+  seenRequestIds: Set<string>;
   /** Output tokens of the newest API response */
   lastRequestOutput: number;
   /** Wall-clock span of the newest API response in ms; undefined until measurable */
   lastRequestDurationMs?: number;
   /** Id of the newest API response, tracked while its records stream in */
   lastRequestId?: string;
-  /** Timestamp of the newest non-assistant entry — where the current request began */
+  /** Start of the newest response — the boundary pinned when its id first appeared */
+  lastRequestStartAt?: number;
+  /** Timestamp of the newest `user` entry (prompt or tool_result) */
   lastBoundaryAt?: number;
 }
 

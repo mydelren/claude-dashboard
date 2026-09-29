@@ -46,8 +46,9 @@ function createParsedTranscript(): ParsedTranscript {
     pendingTaskCreates: new Map(),
     pendingTaskUpdates: new Map(),
     activeSlashCommand: null,
-    totalOutputTokens: 0,
-    seenMessageIds: new Set(),
+    sessionOutputTokens: 0,
+    sessionRequestMs: 0,
+    seenRequestIds: new Set(),
     lastRequestOutput: 0,
   };
 }
@@ -235,45 +236,73 @@ function processEntries(
       }
     }
 
-    // Token accounting for the tokenSpeed widget, covering both spans it can report.
-    // A response arrives as several records sharing one message id, and the usage
-    // block repeats on each — most of them zero, with the real count on the last —
-    // so both accumulators key off the id and ignore zeroes.
-    if (entry.type === 'assistant') {
-      const msg = entry.message as { id?: string; usage?: { output_tokens?: number } } | undefined;
-      const msgId = msg?.id;
-      const out = msg?.usage?.output_tokens;
+    accountTokens(existing, entry);
+  }
+}
 
-      // Session total: sum each response once.
-      if (msgId && typeof out === 'number' && out > 0 && !existing.seenMessageIds.has(msgId)) {
-        existing.seenMessageIds.add(msgId);
-        existing.totalOutputTokens += out;
-      }
+/**
+ * Token accounting for the tokenSpeed / tokenSpeedLast widgets.
+ *
+ * Both halves of each rate come from the main transcript. stdin's
+ * cost.total_api_duration_ms is not usable as a denominator: it accumulates every
+ * API call in the process (subagents, compaction, side queries), while subagent
+ * output lives in separate transcripts.
+ *
+ * A response arrives as several records sharing one message id; the usage block
+ * repeats on each, mostly 0 with the real count on the last, so the newest value
+ * per id wins. A request's span runs from the `user` entry (prompt or tool_result)
+ * that triggered it to its latest record — the response's own first-to-last record
+ * gap covers only the tail of the stream and would overstate the rate.
+ */
+function accountTokens(existing: ParsedTranscript, entry: TranscriptEntry): void {
+  const t = entry.timestamp ? Date.parse(entry.timestamp) : NaN;
 
-      // Newest response: its own output plus the wall-clock span it took. The span
-      // runs from the last non-assistant entry (the turn or tool result that
-      // triggered the request) to this record; the response's own first-to-last
-      // record gap covers only the tail of the stream and would overstate the rate.
-      if (msgId) {
-        if (msgId !== existing.lastRequestId) {
-          existing.lastRequestId = msgId;
-          existing.lastRequestOutput = 0;
-          existing.lastRequestDurationMs = undefined;
-        }
-        if (typeof out === 'number' && out > existing.lastRequestOutput) {
-          existing.lastRequestOutput = out;
-        }
-        if (entry.timestamp) {
-          const t = Date.parse(entry.timestamp);
-          if (Number.isFinite(t) && existing.lastBoundaryAt !== undefined && t > existing.lastBoundaryAt) {
-            existing.lastRequestDurationMs = t - existing.lastBoundaryAt;
-          }
-        }
-      }
-    } else if (entry.timestamp) {
-      const t = Date.parse(entry.timestamp);
-      if (Number.isFinite(t)) existing.lastBoundaryAt = t;
-    }
+  if (entry.type === 'user') {
+    // Only user entries start a request. system/attachment/progress entries can land
+    // between the trigger and the response and would shorten the span.
+    if (Number.isFinite(t)) existing.lastBoundaryAt = t;
+    return;
+  }
+  if (entry.type !== 'assistant') return;
+
+  const msg = entry.message as { id?: string; usage?: { output_tokens?: number } } | undefined;
+  const msgId = msg?.id;
+  if (!msgId) return;
+
+  if (msgId !== existing.lastRequestId) {
+    // An id already finished once is a replayed record; counting it again would
+    // double the session total.
+    if (existing.seenRequestIds.has(msgId)) return;
+    existing.seenRequestIds.add(msgId);
+    existing.lastRequestId = msgId;
+    existing.lastRequestOutput = 0;
+    existing.lastRequestDurationMs = undefined;
+    // Pin the start now: with streaming tool execution a tool_result can be written
+    // before this response's later records, and must not restart its span.
+    existing.lastRequestStartAt = existing.lastBoundaryAt;
+  }
+
+  const prevOut = existing.lastRequestOutput;
+  const prevMs = existing.lastRequestDurationMs;
+
+  const out = msg?.usage?.output_tokens;
+  if (typeof out === 'number' && out > prevOut) existing.lastRequestOutput = out;
+
+  const start = existing.lastRequestStartAt;
+  if (Number.isFinite(t) && start !== undefined && t > start) {
+    existing.lastRequestDurationMs = t - start;
+  }
+
+  // Session totals hold only requests with both a count and a span, so the two
+  // halves of the ratio always cover the same requests. Apply this request's delta.
+  const measured = (o: number, ms?: number) => o > 0 && ms !== undefined && ms > 0;
+  if (measured(prevOut, prevMs)) {
+    existing.sessionOutputTokens -= prevOut;
+    existing.sessionRequestMs -= prevMs!;
+  }
+  if (measured(existing.lastRequestOutput, existing.lastRequestDurationMs)) {
+    existing.sessionOutputTokens += existing.lastRequestOutput;
+    existing.sessionRequestMs += existing.lastRequestDurationMs!;
   }
 }
 

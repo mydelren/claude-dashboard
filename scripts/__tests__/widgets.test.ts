@@ -74,7 +74,7 @@ import { sessionDurationWidget } from '../widgets/session-duration.js';
 import { versionWidget } from '../widgets/version.js';
 import { linesChangedWidget, clearDiffCacheForTest } from '../widgets/lines-changed.js';
 import { outputStyleWidget } from '../widgets/output-style.js';
-import { tokenSpeedWidget } from '../widgets/token-speed.js';
+import { tokenSpeedWidget, tokenSpeedLastWidget } from '../widgets/token-speed.js';
 import { sessionNameWidget } from '../widgets/session-name.js';
 import { todayCostWidget } from '../widgets/today-cost.js';
 import { budgetWidget } from '../widgets/budget.js';
@@ -142,8 +142,9 @@ function createTranscript(overrides: Partial<ParsedTranscript> = {}): ParsedTran
     pendingTaskCreates: new Map(),
     pendingTaskUpdates: new Map(),
     activeSlashCommand: null,
-    totalOutputTokens: 0,
-    seenMessageIds: new Set(),
+    sessionOutputTokens: 0,
+    sessionRequestMs: 0,
+    seenRequestIds: new Set(),
     lastRequestOutput: 0,
     ...overrides,
   };
@@ -2258,12 +2259,16 @@ describe('widgets', () => {
       expect(tokenSpeedWidget.name).toBe('Token Speed');
     });
 
-    // Default mode is 'session'. stdin's per-response total_output_tokens must be
-    // ignored: pairing it with the session's cumulative API duration is the bug this
-    // widget was carrying since Claude Code 2.1.132 redefined the field.
-    it('should report the session average by default', async () => {
+    // stdin must be ignored: context_window.total_output_tokens is per-response since
+    // Claude Code 2.1.132, and cost.total_api_duration_ms also counts subagent calls.
+    it('should report session output over summed request spans', async () => {
       vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(
-        createTranscript({ totalOutputTokens: 42000, lastRequestOutput: 1500, lastRequestDurationMs: 10000 })
+        createTranscript({
+          sessionOutputTokens: 42000,
+          sessionRequestMs: 300000,
+          lastRequestOutput: 1500,
+          lastRequestDurationMs: 10000,
+        })
       );
       const ctx = createContext({
         context_window: {
@@ -2274,105 +2279,68 @@ describe('widgets', () => {
         },
         cost: { total_cost_usd: 0.5, total_api_duration_ms: 600000 },
       });
-      const data = await tokenSpeedWidget.getData(ctx);
 
-      // 42000 / (600000 / 1000) = 70 — not 3000/600 = 5 (stdin, per-response over
-      // session), and not 1500/10 = 150 (the last-response rate).
-      expect(data?.tokensPerSecond).toBe(70);
-    });
-
-    it('should report the last response when tokenSpeedMode is last', async () => {
-      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(
-        createTranscript({ totalOutputTokens: 42000, lastRequestOutput: 1500, lastRequestDurationMs: 10000 })
-      );
-      const ctx = createContext(
-        { cost: { total_cost_usd: 0.5, total_api_duration_ms: 600000 } },
-        { tokenSpeedMode: 'last' }
-      );
-      const data = await tokenSpeedWidget.getData(ctx);
-
-      // 1500 / (10000 / 1000) = 150 — the session average (70) and stdin (5) must not leak in.
-      expect(data?.tokensPerSecond).toBe(150);
-    });
-
-    it('should return null in last mode when no span was measured', async () => {
-      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(
-        createTranscript({ totalOutputTokens: 42000, lastRequestOutput: 1500 })
-      );
-      const ctx = createContext(
-        { cost: { total_cost_usd: 0.5, total_api_duration_ms: 600000 } },
-        { tokenSpeedMode: 'last' }
-      );
-      expect(await tokenSpeedWidget.getData(ctx)).toBeNull();
-    });
-
-    it('should return null in last mode when the response produced no output', async () => {
-      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(
-        createTranscript({ lastRequestOutput: 0, lastRequestDurationMs: 10000 })
-      );
-      const ctx = createContext(
-        { cost: { total_cost_usd: 0.5, total_api_duration_ms: 600000 } },
-        { tokenSpeedMode: 'last' }
-      );
-      expect(await tokenSpeedWidget.getData(ctx)).toBeNull();
+      // 42000 / 300 = 140 — not 3000/600 (stdin) nor 42000/600 (subagent-inflated denominator).
+      expect((await tokenSpeedWidget.getData(ctx))?.tokensPerSecond).toBe(140);
     });
 
     it('should return null when the transcript is unavailable', async () => {
       vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(null);
-      const ctx = createContext({
-        cost: { total_cost_usd: 0.5, total_api_duration_ms: 10000 },
-      });
-      expect(await tokenSpeedWidget.getData(ctx)).toBeNull();
+      expect(await tokenSpeedWidget.getData(createContext())).toBeNull();
     });
 
-    it('should return null when total_api_duration_ms is missing', async () => {
-      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(
-        createTranscript({ totalOutputTokens: 42000 })
-      );
-      const ctx = createContext({
-        cost: { total_cost_usd: 0.5 },
-      });
-      const data = await tokenSpeedWidget.getData(ctx);
-      expect(data).toBeNull();
-    });
-
-    it('should return null when total_api_duration_ms is 0', async () => {
-      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(
-        createTranscript({ totalOutputTokens: 42000 })
-      );
-      const ctx = createContext({
-        cost: { total_cost_usd: 0.5, total_api_duration_ms: 0 },
-      });
-      const data = await tokenSpeedWidget.getData(ctx);
-      expect(data).toBeNull();
-    });
-
-    it('should return null when the session has no output tokens yet', async () => {
-      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(
-        createTranscript({ totalOutputTokens: 0 })
-      );
-      const ctx = createContext({
-        cost: { total_cost_usd: 0.5, total_api_duration_ms: 5000 },
-      });
-      const data = await tokenSpeedWidget.getData(ctx);
-      expect(data).toBeNull();
+    it('should return null before any request is measured', async () => {
+      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(createTranscript());
+      expect(await tokenSpeedWidget.getData(createContext())).toBeNull();
     });
 
     it('should render token speed with lightning icon', () => {
-      const ctx = createContext();
-      const data = { tokensPerSecond: 150 };
-      const result = tokenSpeedWidget.render(data, ctx);
-
+      const result = tokenSpeedWidget.render({ tokensPerSecond: 150 }, createContext());
       expect(result).toContain(ICON.zap);
       expect(result).toContain('150 tok/s');
     });
 
     it('should round tokensPerSecond in render', () => {
-      const ctx = createContext();
-      const data = { tokensPerSecond: 123.7 };
-      const result = tokenSpeedWidget.render(data, ctx);
-
+      const result = tokenSpeedWidget.render({ tokensPerSecond: 123.7 }, createContext());
       expect(result).toContain('124 tok/s');
+    });
+  });
+
+  describe('tokenSpeedLastWidget', () => {
+    it('should have correct id', () => {
+      expect(tokenSpeedLastWidget.id).toBe('tokenSpeedLast');
+    });
+
+    it('should report the newest response alone', async () => {
+      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(
+        createTranscript({
+          sessionOutputTokens: 42000,
+          sessionRequestMs: 300000,
+          lastRequestOutput: 1500,
+          lastRequestDurationMs: 10000,
+        })
+      );
+      expect((await tokenSpeedLastWidget.getData(createContext()))?.tokensPerSecond).toBe(150);
+    });
+
+    it('should return null when no span was measured', async () => {
+      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(
+        createTranscript({ lastRequestOutput: 1500 })
+      );
+      expect(await tokenSpeedLastWidget.getData(createContext())).toBeNull();
+    });
+
+    it('should return null when the response produced no output', async () => {
+      vi.spyOn(transcriptParser, 'getTranscript').mockResolvedValue(
+        createTranscript({ lastRequestOutput: 0, lastRequestDurationMs: 10000 })
+      );
+      expect(await tokenSpeedLastWidget.getData(createContext())).toBeNull();
+    });
+
+    it('should render with a label that sets it apart from tokenSpeed', () => {
+      const result = tokenSpeedLastWidget.render({ tokensPerSecond: 150 }, createContext());
+      expect(result).toContain(ICON.zap);
+      expect(result).toContain('last 150 tok/s');
     });
   });
 

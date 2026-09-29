@@ -1,69 +1,61 @@
 /**
- * Token speed widget - displays output token generation speed
- * Both spans it can report are derived from the transcript; see tokenSpeedMode.
+ * Token speed widgets - display output token generation speed
+ * tokenSpeed: session average. tokenSpeedLast: the newest response alone.
+ * Both are derived from the transcript (see accountTokens in transcript-parser).
  * @handbook 3.3-widget-data-sources
  * @tested scripts/__tests__/widgets.test.ts
  */
 
 import type { Widget } from './base.js';
-import type { WidgetContext, TokenSpeedData, ParsedTranscript } from '../types.js';
+import type { WidgetContext, TokenSpeedData } from '../types.js';
 import { colorize, getTheme } from '../utils/colors.js';
 import { ICON } from '../utils/emoji.js';
 import { getTranscript } from '../utils/transcript-parser.js';
+
+function toRate(outputTokens: number, durationMs?: number): TokenSpeedData | null {
+  if (outputTokens <= 0 || !durationMs || durationMs <= 0) return null;
+  const tokensPerSecond = outputTokens / (durationMs / 1000);
+  return Number.isFinite(tokensPerSecond) && tokensPerSecond > 0 ? { tokensPerSecond } : null;
+}
+
+function formatRate(data: TokenSpeedData): string {
+  return `${Math.round(data.tokensPerSecond)} tok/s`;
+}
 
 export const tokenSpeedWidget: Widget<TokenSpeedData> = {
   id: 'tokenSpeed',
   name: 'Token Speed',
 
   async getData(ctx: WidgetContext): Promise<TokenSpeedData | null> {
-    // Until Claude Code 2.1.132, stdin's context_window held session totals and the
-    // ratio below was a session average. 2.1.132 redefined those fields as
-    // current-context values, so the numerator became the newest response's output
-    // while the denominator stayed the session's cumulative API duration — the
-    // reading then sank as the session grew. Both halves come from the transcript
-    // now, which also lets the widget scope itself to a single response.
+    // Until Claude Code 2.1.132 this read stdin's context_window.total_output_tokens
+    // over cost.total_api_duration_ms. 2.1.132 made the former per-response, and the
+    // latter also counts subagent/side-query calls, so both halves now come from the
+    // main transcript.
     const transcript = await getTranscript(ctx);
     if (!transcript) return null;
-
-    const tokensPerSecond =
-      ctx.config.tokenSpeedMode === 'last'
-        ? lastResponseRate(transcript)
-        : sessionRate(transcript, ctx.stdin.cost?.total_api_duration_ms);
-
-    if (tokensPerSecond === null) return null;
-
-    return { tokensPerSecond };
+    return toRate(transcript.sessionOutputTokens, transcript.sessionRequestMs);
   },
 
   render(data: TokenSpeedData, _ctx: WidgetContext): string {
-    return colorize(`${ICON.zap} ${Math.round(data.tokensPerSecond)} tok/s`, getTheme().accent);
+    return colorize(`${ICON.zap} ${formatRate(data)}`, getTheme().accent);
   },
 };
 
-/**
- * Throughput of the newest response alone: its output tokens over its own wall-clock
- * span. Null until a response has both a count and a measurable span.
- */
-function lastResponseRate(transcript: ParsedTranscript): number | null {
-  const { lastRequestOutput, lastRequestDurationMs } = transcript;
-  if (!lastRequestOutput || lastRequestOutput <= 0) return null;
-  if (!lastRequestDurationMs || lastRequestDurationMs <= 0) return null;
+export const tokenSpeedLastWidget: Widget<TokenSpeedData> = {
+  id: 'tokenSpeedLast',
+  name: 'Token Speed (Last Response)',
 
-  const rate = lastRequestOutput / (lastRequestDurationMs / 1000);
-  return Number.isFinite(rate) && rate > 0 ? rate : null;
-}
+  async getData(ctx: WidgetContext): Promise<TokenSpeedData | null> {
+    const transcript = await getTranscript(ctx);
+    if (!transcript) return null;
+    return toRate(transcript.lastRequestOutput, transcript.lastRequestDurationMs);
+  },
 
-/**
- * Session throughput: every response's output tokens over the session's cumulative
- * API duration. A long session therefore moves slowly — it answers "how fast has
- * this session been", not "how fast was that last response".
- */
-function sessionRate(transcript: ParsedTranscript, apiDurationMs?: number): number | null {
-  if (!apiDurationMs || apiDurationMs <= 0) return null;
-
-  const { totalOutputTokens } = transcript;
-  if (!totalOutputTokens || totalOutputTokens <= 0) return null;
-
-  const rate = totalOutputTokens / (apiDurationMs / 1000);
-  return Number.isFinite(rate) && rate > 0 ? rate : null;
-}
+  render(data: TokenSpeedData, ctx: WidgetContext): string {
+    // Labelled so it stays distinguishable when shown next to tokenSpeed.
+    return colorize(
+      `${ICON.zap} ${ctx.translations.widgets.tokenSpeedLast} ${formatRate(data)}`,
+      getTheme().accent
+    );
+  },
+};

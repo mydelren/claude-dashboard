@@ -1154,10 +1154,10 @@ describe('transcript-parser', () => {
       const { parseTranscript } = await import('../utils/transcript-parser.js');
       const transcript = await parseTranscript(TEST_FILE);
 
-      expect(transcript!.totalOutputTokens).toBe(1200);
+      expect(transcript!.sessionOutputTokens).toBe(1200);
     });
 
-    it('sums output tokens across responses', async () => {
+    it('sums output tokens and spans across responses', async () => {
       await writeTranscript([
         { type: 'user', timestamp: '2024-01-01T00:00:00.000Z', message: { content: 'one' } },
         { type: 'assistant', timestamp: '2024-01-01T00:00:05.000Z', message: { id: 'msg_a', usage: { output_tokens: 100 } } },
@@ -1168,7 +1168,8 @@ describe('transcript-parser', () => {
       const { parseTranscript } = await import('../utils/transcript-parser.js');
       const transcript = await parseTranscript(TEST_FILE);
 
-      expect(transcript!.totalOutputTokens).toBe(300);
+      expect(transcript!.sessionOutputTokens).toBe(300);
+      expect(transcript!.sessionRequestMs).toBe(10000);
     });
 
     // The span must start at the turn that triggered the request. A response's own
@@ -1204,7 +1205,7 @@ describe('transcript-parser', () => {
       expect(transcript!.lastRequestOutput).toBe(50);
       expect(transcript!.lastRequestDurationMs).toBe(1000);
       // ...while the session total still holds both.
-      expect(transcript!.totalOutputTokens).toBe(950);
+      expect(transcript!.sessionOutputTokens).toBe(950);
     });
 
     it('leaves the span unset when no turn precedes the response', async () => {
@@ -1217,6 +1218,69 @@ describe('transcript-parser', () => {
 
       expect(transcript!.lastRequestOutput).toBe(100);
       expect(transcript!.lastRequestDurationMs).toBeUndefined();
+    });
+
+    it('excludes an unmeasured response from both session totals', async () => {
+      await writeTranscript([
+        { type: 'assistant', timestamp: '2024-01-01T00:00:05.000Z', message: { id: 'msg_a', usage: { output_tokens: 100 } } },
+        { type: 'user', timestamp: '2024-01-01T00:00:10.000Z', message: { content: 'two' } },
+        { type: 'assistant', timestamp: '2024-01-01T00:00:12.000Z', message: { id: 'msg_b', usage: { output_tokens: 400 } } },
+      ]);
+
+      const { parseTranscript } = await import('../utils/transcript-parser.js');
+      const transcript = await parseTranscript(TEST_FILE);
+
+      expect(transcript!.sessionOutputTokens).toBe(400);
+      expect(transcript!.sessionRequestMs).toBe(2000);
+    });
+
+    // Only user entries (prompt / tool_result) start a request; a system or attachment
+    // entry between the trigger and the response must not shorten the span.
+    it('ignores non-user entries when finding the request start', async () => {
+      await writeTranscript([
+        { type: 'user', timestamp: '2024-01-01T00:00:00.000Z', message: { content: 'hi' } },
+        { type: 'system', timestamp: '2024-01-01T00:00:03.000Z', content: 'retrying' },
+        { type: 'assistant', timestamp: '2024-01-01T00:00:04.000Z', message: { id: 'msg_a', usage: { output_tokens: 400 } } },
+      ]);
+
+      const { parseTranscript } = await import('../utils/transcript-parser.js');
+      const transcript = await parseTranscript(TEST_FILE);
+
+      expect(transcript!.lastRequestDurationMs).toBe(4000);
+    });
+
+    // With streaming tool execution a tool_result can be written before the rest of
+    // the same response; the response's start must stay pinned.
+    it('keeps the request start pinned when a tool_result interleaves its records', async () => {
+      await writeTranscript([
+        { type: 'user', timestamp: '2024-01-01T00:00:00.000Z', message: { content: 'hi' } },
+        { type: 'assistant', timestamp: '2024-01-01T00:00:02.000Z', message: { id: 'msg_a', usage: { output_tokens: 0 } } },
+        { type: 'user', timestamp: '2024-01-01T00:00:03.000Z', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } },
+        { type: 'assistant', timestamp: '2024-01-01T00:00:04.000Z', message: { id: 'msg_a', usage: { output_tokens: 800 } } },
+      ]);
+
+      const { parseTranscript } = await import('../utils/transcript-parser.js');
+      const transcript = await parseTranscript(TEST_FILE);
+
+      expect(transcript!.lastRequestDurationMs).toBe(4000);
+      expect(transcript!.sessionOutputTokens).toBe(800);
+      expect(transcript!.sessionRequestMs).toBe(4000);
+    });
+
+    it('does not count a replayed response twice', async () => {
+      await writeTranscript([
+        { type: 'user', timestamp: '2024-01-01T00:00:00.000Z', message: { content: 'one' } },
+        { type: 'assistant', timestamp: '2024-01-01T00:00:02.000Z', message: { id: 'msg_a', usage: { output_tokens: 100 } } },
+        { type: 'user', timestamp: '2024-01-01T00:00:10.000Z', message: { content: 'two' } },
+        { type: 'assistant', timestamp: '2024-01-01T00:00:12.000Z', message: { id: 'msg_b', usage: { output_tokens: 200 } } },
+        { type: 'assistant', timestamp: '2024-01-01T00:00:13.000Z', message: { id: 'msg_a', usage: { output_tokens: 100 } } },
+      ]);
+
+      const { parseTranscript } = await import('../utils/transcript-parser.js');
+      const transcript = await parseTranscript(TEST_FILE);
+
+      expect(transcript!.sessionOutputTokens).toBe(300);
+      expect(transcript!.lastRequestOutput).toBe(200);
     });
   });
 });

@@ -60,6 +60,7 @@ var PRESET_CHAR_MAP = {
   L: "linesChanged",
   Y: "outputStyle",
   Q: "tokenSpeed",
+  q: "tokenSpeedLast",
   J: "sessionName",
   "@": "todayCost",
   "?": "lastPrompt",
@@ -79,7 +80,6 @@ var DEFAULT_CONFIG = {
   language: "auto",
   plan: "max",
   displayMode: "compact",
-  tokenSpeedMode: "session",
   cache: {
     ttlSeconds: 300
   }
@@ -942,6 +942,7 @@ var en_default = {
     hooks: "Hooks",
     burnRate: "Rate",
     cache: "Cache",
+    tokenSpeedLast: "last",
     cacheMiss: "miss",
     toLimit: "to",
     forecast: "Forecast",
@@ -1003,6 +1004,7 @@ var ko_default = {
     hooks: "\uD6C5",
     burnRate: "\uC18C\uBAA8\uC728",
     cache: "\uCE90\uC2DC",
+    tokenSpeedLast: "\uCD5C\uADFC",
     cacheMiss: "miss",
     toLimit: "\uD6C4",
     forecast: "\uC608\uCE21",
@@ -1894,8 +1896,9 @@ function createParsedTranscript() {
     pendingTaskCreates: /* @__PURE__ */ new Map(),
     pendingTaskUpdates: /* @__PURE__ */ new Map(),
     activeSlashCommand: null,
-    totalOutputTokens: 0,
-    seenMessageIds: /* @__PURE__ */ new Set(),
+    sessionOutputTokens: 0,
+    sessionRequestMs: 0,
+    seenRequestIds: /* @__PURE__ */ new Set(),
     lastRequestOutput: 0
   };
 }
@@ -2030,35 +2033,48 @@ function processEntries(entries, existing) {
         }
       }
     }
-    if (entry.type === "assistant") {
-      const msg = entry.message;
-      const msgId = msg?.id;
-      const out = msg?.usage?.output_tokens;
-      if (msgId && typeof out === "number" && out > 0 && !existing.seenMessageIds.has(msgId)) {
-        existing.seenMessageIds.add(msgId);
-        existing.totalOutputTokens += out;
-      }
-      if (msgId) {
-        if (msgId !== existing.lastRequestId) {
-          existing.lastRequestId = msgId;
-          existing.lastRequestOutput = 0;
-          existing.lastRequestDurationMs = void 0;
-        }
-        if (typeof out === "number" && out > existing.lastRequestOutput) {
-          existing.lastRequestOutput = out;
-        }
-        if (entry.timestamp) {
-          const t = Date.parse(entry.timestamp);
-          if (Number.isFinite(t) && existing.lastBoundaryAt !== void 0 && t > existing.lastBoundaryAt) {
-            existing.lastRequestDurationMs = t - existing.lastBoundaryAt;
-          }
-        }
-      }
-    } else if (entry.timestamp) {
-      const t = Date.parse(entry.timestamp);
-      if (Number.isFinite(t))
-        existing.lastBoundaryAt = t;
-    }
+    accountTokens(existing, entry);
+  }
+}
+function accountTokens(existing, entry) {
+  const t = entry.timestamp ? Date.parse(entry.timestamp) : NaN;
+  if (entry.type === "user") {
+    if (Number.isFinite(t))
+      existing.lastBoundaryAt = t;
+    return;
+  }
+  if (entry.type !== "assistant")
+    return;
+  const msg = entry.message;
+  const msgId = msg?.id;
+  if (!msgId)
+    return;
+  if (msgId !== existing.lastRequestId) {
+    if (existing.seenRequestIds.has(msgId))
+      return;
+    existing.seenRequestIds.add(msgId);
+    existing.lastRequestId = msgId;
+    existing.lastRequestOutput = 0;
+    existing.lastRequestDurationMs = void 0;
+    existing.lastRequestStartAt = existing.lastBoundaryAt;
+  }
+  const prevOut = existing.lastRequestOutput;
+  const prevMs = existing.lastRequestDurationMs;
+  const out = msg?.usage?.output_tokens;
+  if (typeof out === "number" && out > prevOut)
+    existing.lastRequestOutput = out;
+  const start = existing.lastRequestStartAt;
+  if (Number.isFinite(t) && start !== void 0 && t > start) {
+    existing.lastRequestDurationMs = t - start;
+  }
+  const measured = (o, ms) => o > 0 && ms !== void 0 && ms > 0;
+  if (measured(prevOut, prevMs)) {
+    existing.sessionOutputTokens -= prevOut;
+    existing.sessionRequestMs -= prevMs;
+  }
+  if (measured(existing.lastRequestOutput, existing.lastRequestDurationMs)) {
+    existing.sessionOutputTokens += existing.lastRequestOutput;
+    existing.sessionRequestMs += existing.lastRequestDurationMs;
   }
 }
 async function readFromOffset(filePath, offset, fileSize) {
@@ -4341,6 +4357,15 @@ var outputStyleWidget = {
 };
 
 // scripts/widgets/token-speed.ts
+function toRate(outputTokens, durationMs) {
+  if (outputTokens <= 0 || !durationMs || durationMs <= 0)
+    return null;
+  const tokensPerSecond = outputTokens / (durationMs / 1e3);
+  return Number.isFinite(tokensPerSecond) && tokensPerSecond > 0 ? { tokensPerSecond } : null;
+}
+function formatRate(data) {
+  return `${Math.round(data.tokensPerSecond)} tok/s`;
+}
 var tokenSpeedWidget = {
   id: "tokenSpeed",
   name: "Token Speed",
@@ -4348,33 +4373,28 @@ var tokenSpeedWidget = {
     const transcript = await getTranscript(ctx);
     if (!transcript)
       return null;
-    const tokensPerSecond = ctx.config.tokenSpeedMode === "last" ? lastResponseRate(transcript) : sessionRate(transcript, ctx.stdin.cost?.total_api_duration_ms);
-    if (tokensPerSecond === null)
-      return null;
-    return { tokensPerSecond };
+    return toRate(transcript.sessionOutputTokens, transcript.sessionRequestMs);
   },
   render(data, _ctx) {
-    return colorize(`${ICON.zap} ${Math.round(data.tokensPerSecond)} tok/s`, getTheme().accent);
+    return colorize(`${ICON.zap} ${formatRate(data)}`, getTheme().accent);
   }
 };
-function lastResponseRate(transcript) {
-  const { lastRequestOutput, lastRequestDurationMs } = transcript;
-  if (!lastRequestOutput || lastRequestOutput <= 0)
-    return null;
-  if (!lastRequestDurationMs || lastRequestDurationMs <= 0)
-    return null;
-  const rate = lastRequestOutput / (lastRequestDurationMs / 1e3);
-  return Number.isFinite(rate) && rate > 0 ? rate : null;
-}
-function sessionRate(transcript, apiDurationMs) {
-  if (!apiDurationMs || apiDurationMs <= 0)
-    return null;
-  const { totalOutputTokens } = transcript;
-  if (!totalOutputTokens || totalOutputTokens <= 0)
-    return null;
-  const rate = totalOutputTokens / (apiDurationMs / 1e3);
-  return Number.isFinite(rate) && rate > 0 ? rate : null;
-}
+var tokenSpeedLastWidget = {
+  id: "tokenSpeedLast",
+  name: "Token Speed (Last Response)",
+  async getData(ctx) {
+    const transcript = await getTranscript(ctx);
+    if (!transcript)
+      return null;
+    return toRate(transcript.lastRequestOutput, transcript.lastRequestDurationMs);
+  },
+  render(data, ctx) {
+    return colorize(
+      `${ICON.zap} ${ctx.translations.widgets.tokenSpeedLast} ${formatRate(data)}`,
+      getTheme().accent
+    );
+  }
+};
 
 // scripts/widgets/session-name.ts
 var sessionNameWidget = {
@@ -4731,6 +4751,7 @@ var widgetRegistry = /* @__PURE__ */ new Map([
   ["linesChanged", linesChangedWidget],
   ["outputStyle", outputStyleWidget],
   ["tokenSpeed", tokenSpeedWidget],
+  ["tokenSpeedLast", tokenSpeedLastWidget],
   ["sessionName", sessionNameWidget],
   ["todayCost", todayCostWidget],
   ["lastPrompt", lastPromptWidget],
